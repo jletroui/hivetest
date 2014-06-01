@@ -2,3 +2,8 @@ target
 project/target
 project/project
 .idea*
+lib_managed
+*.classpath
+*.log
+metastore_db
+logs
