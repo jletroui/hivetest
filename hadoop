@@ -65,12 +65,17 @@ bin=`cd "$bin"; pwd`
 # The following lines makes sure to point the HADOOP_HOME to the retrieved jars
 #
 ###################################################################################
+
+# This one is commented since we manually 'take over' the config below
+#. "$bin"/hadoop-config.sh
+
 export HADOOP_HOME=$(pwd)
 export HADOOP_MAPRED_HOME=$HADOOP_HOME
 export HADOOP_COMMON_HOME=$HADOOP_HOME
 export HADOOP_HDFS_HOME=$HADOOP_HOME
 HADOOP_USER_CLASSPATH_FIRST=true
 HADOOP_CLASSPATH=$(cat hadoop.classpath)
+
 ###################################################################################
 #
 # END HIVE TEST SPECIFIC LINES

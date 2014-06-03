@@ -7,3 +7,4 @@ lib_managed
 *.log
 metastore_db
 logs
+var

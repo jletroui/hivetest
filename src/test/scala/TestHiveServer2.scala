@@ -1,5 +1,4 @@
 import java.io.File
-import java.nio.file.Files
 import java.sql.{Connection, DriverManager, SQLException}
 import org.apache.commons.io.FileUtils
 import org.apache.hadoop.conf.Configuration
@@ -10,41 +9,49 @@ import org.apache.hadoop.mapred.MiniMRCluster
 import org.apache.hive.jdbc.HiveDriver
 import org.apache.hive.service.cli.session.{HiveSessionHookContext, HiveSessionHook}
 import org.apache.hive.service.server.HiveServer2
+import org.slf4j.LoggerFactory
 
 object TestHiveServer2 {
+  val logger = LoggerFactory.getLogger(getClass)
   val JdbcUrl = "jdbc:hive2://localhost"
-  private val currentDir = new File(".").getCanonicalPath()
-  FileUtils.deleteDirectory(new File(s"$currentDir/logs"))
-  FileUtils.deleteDirectory(new File(s"$currentDir/metastore_db"))
+  private [this] val currentDir = new File(".").getCanonicalPath()
+  private [this] val conf = new Configuration()
 
   // This is making sure we are not picking up locally installed hadoop libraries and stay isolated
   System.setProperty("java.library.path","")
-  System.setProperty("hadoop.log.dir", "logs/hadoop") // MAPREDUCE-2785
-  System.setProperty("hadoop.security.group.mapping", "org.apache.hadoop.security.ShellBasedUnixGroupsMapping")
-  System.setProperty("hadoop.home.dir", currentDir)
+  // We could use a temporary directory, but those logs can be useful for debugging a test failing
+  System.setProperty("hadoop.log.dir", "var/logs") // MAPREDUCE-2785
 
   DriverManager.registerDriver(new HiveDriver)
 
-  private [this] var tempDirectories = List.empty[File]
-  private [this] val conf = new Configuration()
-  conf.set(MiniDFSCluster.HDFS_MINIDFS_BASEDIR, createTempDirectory("dfs_base"))
+  logger.info("Cleaning directories")
+  FileUtils.deleteDirectory(new File("var"))
+  FileUtils.deleteDirectory(new File("metastore_db"))
+
+  logger.info("Starting HDFS")
+  conf.set(MiniDFSCluster.HDFS_MINIDFS_BASEDIR, s"var/dfs")
+  conf.set("hadoop.home.dir", currentDir)
   conf.set("dfs.permissions", "false")
   conf.set("hadoop.security.authorization", "false")
-  conf.set("hadoop.security.group.mapping", "org.apache.hadoop.security.ShellBasedUnixGroupsMapping")
 
   private [this] val miniDFS = new MiniDFSCluster.Builder(conf).build()
 
+  Thread.sleep(200)
+
+  logger.info("Starting MapReduce v1")
   private [this] val miniMR = new MiniMRCluster(
-    1, // numTaskTrackers
+    1,      // numTaskTrackers
     miniDFS.getFileSystem().getUri().toString(),
-    1, // numTaskTrackerDirectories
-    null, // racks
-    null, // hosts
+    1,      // numTaskTrackerDirectories
+    null,   // racks
+    null,   // hosts
     new JobConf(conf))
 
+  // Save those for later
   private [this] val jt = miniMR.createJobConf(new JobConf(conf)).get("mapred.job.tracker")
-  private [this] val warehouseDir = "file" + File.pathSeparator + createTempDirectory("hive_warehouse")
+  private [this] val warehouseDir = s"file:$currentDir/var/dfs/hive"
 
+  logger.info("Starting Hive")
   private [this] val hiveConf = new HiveConf(getClass())
   configureHive(hiveConf)
   // A design issue in HiveServer2 is preventing the hive config to be propagated to internal session object.
@@ -57,12 +64,6 @@ object TestHiveServer2 {
   private [this] val server = new HiveServer2()
   server.init(hiveConf)
   server.start()
-
-  private [this] def createTempDirectory(prefix: String) = {
-    val resVal = Files.createTempDirectory(prefix).toFile
-    tempDirectories = resVal :: tempDirectories
-    resVal.getCanonicalPath
-  }
 
   def waitForServerToBeReady() {
     var tries = 3
@@ -102,9 +103,6 @@ object TestHiveServer2 {
 
   def close() {
     server.stop()
-    for(tempDir <- tempDirectories) {
-      FileUtils.deleteDirectory(tempDir)
-    }
   }
   // Add configuration to default hive configuration, so Hive can talk to the in-memory hadoop cluster.
   def configureHive(conf: HiveConf) {
@@ -115,8 +113,10 @@ object TestHiveServer2 {
     conf.set(HiveConf.ConfVars.HADOOPJT.varname, jt)
     conf.set(HiveConf.ConfVars.METASTOREWAREHOUSE.varname, warehouseDir)
     // Hive still need to use a hadoop command line tool. This one bundled with the project is pointing to the
-    // minimal hadoop client jars we are downloading through ivy in the extdep config.
+    // minimal hadoop client jars we are downloading through SBT in the "hadoop" ivy config.
     conf.set(HiveConf.ConfVars.HADOOPBIN.varname, s"$currentDir/hadoop")
+    conf.set("mapreduce.framework.name", "local")
+    conf.set("mapred.job.tracker", "local")
 
     //
     // Fix timeouts
